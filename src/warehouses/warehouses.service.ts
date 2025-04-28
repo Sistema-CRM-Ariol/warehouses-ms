@@ -1,16 +1,21 @@
-import { Injectable } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 
 import { PrismaService } from 'src/prisma/prisma.service';
 import { FilterPaginationDto } from 'src/common/dto/filter-pagination.dto';
 
 import { CreateWarehouseDto } from './dto/create-warehouse.dto';
 import { UpdateWarehouseDto } from './dto/update-warehouse.dto';
+import { NATS_SERVICE } from 'src/config/services';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class WarehousesService {
 
-  constructor(private prisma: PrismaService) { }
+  constructor(
+    private prisma: PrismaService,
+    @Inject(NATS_SERVICE) private readonly natsClient: ClientProxy,
+  ) { }
 
   async create(createWarehouseDto: CreateWarehouseDto) {
     try {
@@ -78,8 +83,31 @@ export class WarehousesService {
     };
   }
 
-  findOne(id: string) {   
-    return `This action returns a #${id} warehouse`;
+  async findOne(id: string) {   
+
+    const warehouse = await this.prisma.warehouse.findUnique({
+      where: {
+        id: id
+      }
+    });
+
+    if (!warehouse) {
+      throw new RpcException({
+        statusCode: 404,
+        message: 'No se encontro el almacén'
+      })
+    }
+
+    const products = await firstValueFrom(
+      this.natsClient.send('findProductsByWarehouseId', id)
+    );
+
+    return {
+      warehouse: {
+        ...warehouse,
+        products
+      }
+    };
   }
 
   async update(id: string, updateWarehouseDto: UpdateWarehouseDto) {
